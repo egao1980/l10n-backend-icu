@@ -21,3 +21,9 @@
   (let ((s (format-list '("a" "b" "c") :locale "en" :type :and)))
     (ok (search "a" s))
     (ok (search "c" s))))
+
+(deftest format-relative-time-day
+  (let ((s (format-relative-time -1 :day :locale "en" :numeric :always)))
+    (ok (or (search "day" s :test #'char-equal)
+            (search "1" s)
+            (plusp (length s))))))

@@ -164,9 +164,46 @@
         (cl-stack-icu:udat-close fmt)))))
 
 (defmethod backend-format-relative-time ((backend icu-backend) value unit &key locale numeric options)
-  (declare (ignore backend value unit locale numeric options))
-  (error 'l10n-unsupported :capability :date
-         :message "relative-time not in wave-1 FFI surface"))
+  (declare (ignore backend))
+  (let* ((style (getf options :style :long))
+         (style-e (cffi:foreign-enum-value
+                   'cl-stack-icu:u-date-relative-date-time-formatter-style
+                   (ecase (or style :long)
+                     (:long :long) (:short :short) (:narrow :narrow))))
+         (unit-e (cffi:foreign-enum-value
+                  'cl-stack-icu:u-relative-date-time-unit
+                  (ecase unit
+                    (:year :year) (:quarter :quarter) (:month :month) (:week :week)
+                    (:day :day) (:hour :hour) (:minute :minute) (:second :second))))
+         (offset (float value 1d0))
+         (numeric-p (ecase (or numeric :auto)
+                      (:auto nil)
+                      (:always t))))
+    (with-foreign-object (err :int)
+      (setf (mem-ref err :int) (%zero-error))
+      (let ((fmt (cl-stack-icu:ureldatefmt-open
+                  (%locale-string locale)
+                  (null-pointer)
+                  style-e
+                  cl-stack-icu:+udispctx-capitalization-none+
+                  err)))
+        (cl-stack-icu:check-icu (mem-ref err :int) "ureldatefmt-open")
+        (unwind-protect
+             (flet ((fmt-once (buf cap)
+                      (setf (mem-ref err :int) (%zero-error))
+                      (if numeric-p
+                          (cl-stack-icu:ureldatefmt-format-numeric
+                           fmt offset unit-e buf cap err)
+                          (cl-stack-icu:ureldatefmt-format
+                           fmt offset unit-e buf cap err))))
+               (let ((n (fmt-once (null-pointer) 0)))
+                 (setf (mem-ref err :int) (%zero-error))
+                 (with-foreign-pointer (buf (* (foreign-type-size 'cl-stack-icu:u-char)
+                                              (1+ (max n 0))))
+                   (setf n (fmt-once buf (1+ n)))
+                   (cl-stack-icu:check-icu (mem-ref err :int) "ureldatefmt-format")
+                   (cl-stack-icu:u-chars-to-lisp buf n))))
+          (cl-stack-icu:ureldatefmt-close fmt))))))
 
 (defmethod backend-format-list ((backend icu-backend) items &key locale type width options)
   (declare (ignore backend options))
