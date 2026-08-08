@@ -1,13 +1,17 @@
 (defsystem "l10n-backend-icu"
   :version "0.1.0"
-  :description "l10n-protocol backend over ICU4C (scaffold — bindings TODO)"
+  :description "l10n-protocol backend over cl-stack-icu (ICU4C)"
   :author "egao1980"
   :license "MIT"
-  :depends-on ("l10n-protocol" "cffi")
+  :depends-on ("l10n-protocol" "cl-stack-icu" "cffi")
   :serial t
   :pathname "src"
   :components ((:file "package")
-               (:file "backend"))
+               (:file "util")
+               (:file "backend")
+               (:file "collate")
+               (:file "format")
+               (:file "case-locale"))
   :in-order-to ((test-op (test-op "l10n-backend-icu/tests"))))
 
 (defsystem "l10n-backend-icu/tests"
