@@ -1,5 +1,5 @@
 (defsystem "l10n-backend-icu"
-  :version "0.1.0"
+  :version "0.1.1"
   :description "l10n-protocol backend over cl-stack-icu (ICU4C)"
   :author "egao1980"
   :license "MIT"

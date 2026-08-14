@@ -40,6 +40,16 @@
     (ok (search "1" s))
     (ok (or (search "," s) (search "1,234" s) (search "1234" s)))))
 
+(deftest format-number-skeleton-integer
+  (let ((s (format-number 1234.56d0 :locale "en_US" :skeleton "precision-integer")))
+    (ok (search "1" s))
+    (ok (not (search "." s)))))
+
+(deftest format-date-skeleton-yMd
+  (let ((s (format-date 0 :locale "en_US" :skeleton "yMd")))
+    (ok (plusp (length s)))
+    (ok (or (search "1970" s) (search "70" s) (search "1" s)))))
+
 (deftest format-number-de-decimal-comma
   ;; de_DE uses comma as decimal separator
   (let ((s (format-number 1.5d0 :locale "de_DE")))

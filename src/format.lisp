@@ -47,40 +47,130 @@
                  (cl-stack-icu:u-chars-to-lisp buf n))))
         (cl-stack-icu:unum-close fmt)))))
 
+(defun %format-double-skeleton (skeleton value locale)
+  "ICU NumberFormatter skeleton (unumf_openForSkeletonAndLocale)."
+  (call-with-uchars
+   (string skeleton)
+   (lambda (sk sk-len)
+     (with-foreign-object (err :int)
+       (setf (mem-ref err :int) (%zero-error))
+       (let ((fmt (cl-stack-icu:unumf-open-for-skeleton-and-locale
+                   sk sk-len (%locale-string locale) err)))
+         (cl-stack-icu:check-icu (mem-ref err :int) "unumf-open-for-skeleton-and-locale")
+         (unwind-protect
+              (progn
+                (setf (mem-ref err :int) (%zero-error))
+                (let ((ures (cl-stack-icu:unumf-open-result err)))
+                  (cl-stack-icu:check-icu (mem-ref err :int) "unumf-open-result")
+                  (unwind-protect
+                       (progn
+                         (setf (mem-ref err :int) (%zero-error))
+                         (cl-stack-icu:unumf-format-double fmt (float value 1d0) ures err)
+                         (cl-stack-icu:check-icu (mem-ref err :int) "unumf-format-double")
+                         (setf (mem-ref err :int) (%zero-error))
+                         (let ((ufv (cl-stack-icu:unumf-result-as-value ures err)))
+                           (cl-stack-icu:check-icu (mem-ref err :int) "unumf-result-as-value")
+                           (with-foreign-object (len :int32)
+                             (setf (mem-ref err :int) (%zero-error))
+                             (let ((ptr (cl-stack-icu:ufmtval-get-string ufv len err)))
+                               (cl-stack-icu:check-icu (mem-ref err :int) "ufmtval-get-string")
+                               (cl-stack-icu:u-chars-to-lisp ptr (mem-ref len :int32))))))
+                    (cl-stack-icu:unumf-close-result ures))))
+           (cl-stack-icu:unumf-close fmt)))))))
+
+(defun %pattern-for-skeleton (skeleton locale)
+  (call-with-uchars
+   (string skeleton)
+   (lambda (sk sk-len)
+     (with-foreign-object (err :int)
+       (setf (mem-ref err :int) (%zero-error))
+       (let ((dtpg (cl-stack-icu:udatpg-open (%locale-string locale) err)))
+         (cl-stack-icu:check-icu (mem-ref err :int) "udatpg-open")
+         (unwind-protect
+              (progn
+                (setf (mem-ref err :int) (%zero-error))
+                (let ((n (cl-stack-icu:udatpg-get-best-pattern
+                          dtpg sk sk-len (null-pointer) 0 err)))
+                  (setf (mem-ref err :int) (%zero-error))
+                  (with-foreign-pointer (buf (* (foreign-type-size 'cl-stack-icu:u-char)
+                                                (1+ (max n 0))))
+                    (setf n (cl-stack-icu:udatpg-get-best-pattern
+                             dtpg sk sk-len buf (1+ n) err))
+                    (cl-stack-icu:check-icu (mem-ref err :int) "udatpg-get-best-pattern")
+                    (cl-stack-icu:u-chars-to-lisp buf n))))
+           (cl-stack-icu:udatpg-close dtpg)))))))
+
+(defun %format-date-pattern (value locale pattern)
+  (call-with-uchars
+   pattern
+   (lambda (pat pat-len)
+     (with-foreign-object (err :int)
+       (setf (mem-ref err :int) (%zero-error))
+       (let* ((pat-style (foreign-enum-value 'cl-stack-icu:u-date-format-style :pattern))
+              (fmt (cl-stack-icu:udat-open pat-style pat-style
+                                           (%locale-string locale)
+                                           (null-pointer) -1
+                                           pat pat-len err)))
+         (cl-stack-icu:check-icu (mem-ref err :int) "udat-open")
+         (unwind-protect
+              (progn
+                (setf (mem-ref err :int) (%zero-error))
+                (let ((n (cl-stack-icu:udat-format fmt (%udate-ms value)
+                                                   (null-pointer) 0 (null-pointer) err)))
+                  (setf (mem-ref err :int) (%zero-error))
+                  (with-foreign-pointer (buf (* (foreign-type-size 'cl-stack-icu:u-char)
+                                                (1+ (max n 0))))
+                    (setf n (cl-stack-icu:udat-format fmt (%udate-ms value)
+                                                      buf (1+ n) (null-pointer) err))
+                    (cl-stack-icu:check-icu (mem-ref err :int) "udat-format")
+                    (cl-stack-icu:u-chars-to-lisp buf n))))
+           (cl-stack-icu:udat-close fmt)))))))
+
+(defun %format-date-skeleton (value locale skeleton)
+  (%format-date-pattern value locale (%pattern-for-skeleton skeleton locale)))
+
 (defmethod backend-format-number ((backend icu-backend) value &key locale style skeleton options)
-  (declare (ignore backend skeleton options))
-  (%format-double (or style :decimal) value locale))
+  (declare (ignore backend options))
+  (if (and skeleton (plusp (length (string skeleton))))
+      (%format-double-skeleton skeleton value locale)
+      (%format-double (or style :decimal) value locale)))
 
 (defmethod backend-format-percent ((backend icu-backend) value &key locale skeleton options)
-  (declare (ignore backend skeleton options))
-  (%format-double :percent value locale))
+  (declare (ignore backend options))
+  (if (and skeleton (plusp (length (string skeleton))))
+      (%format-double-skeleton skeleton value locale)
+      (%format-double :percent value locale)))
 
 (defmethod backend-format-currency ((backend icu-backend) value currency &key locale skeleton options)
-  (declare (ignore backend skeleton options))
-  (with-foreign-object (err :int)
-    (setf (mem-ref err :int) (%zero-error))
-    (let ((fmt (cl-stack-icu:unum-open (%number-style :currency)
-                                       (null-pointer) 0
-                                       (%locale-string locale)
-                                       (null-pointer) err)))
-      (cl-stack-icu:check-icu (mem-ref err :int) "unum-open")
-      (unwind-protect
-           (call-with-uchars
-            (string currency)
-            (lambda (cur cur-len)
-              (declare (ignore cur-len))
-              (setf (mem-ref err :int) (%zero-error))
-              (let ((n (cl-stack-icu:unum-format-double-currency
-                        fmt (float value 1d0) cur
-                        (null-pointer) 0 (null-pointer) err)))
-                (setf (mem-ref err :int) (%zero-error))
-                (with-foreign-pointer (buf (* (foreign-type-size 'cl-stack-icu:u-char)
-                                              (1+ (max n 0))))
-                  (setf n (cl-stack-icu:unum-format-double-currency
-                           fmt (float value 1d0) cur buf (1+ n) (null-pointer) err))
-                  (cl-stack-icu:check-icu (mem-ref err :int) "unum-format-double-currency")
-                  (cl-stack-icu:u-chars-to-lisp buf n)))))
-        (cl-stack-icu:unum-close fmt)))))
+  (declare (ignore backend options))
+  (cond
+    ((and skeleton (plusp (length (string skeleton))))
+     (%format-double-skeleton skeleton value locale))
+    (t
+     (with-foreign-object (err :int)
+       (setf (mem-ref err :int) (%zero-error))
+       (let ((fmt (cl-stack-icu:unum-open (%number-style :currency)
+                                          (null-pointer) 0
+                                          (%locale-string locale)
+                                          (null-pointer) err)))
+         (cl-stack-icu:check-icu (mem-ref err :int) "unum-open")
+         (unwind-protect
+              (call-with-uchars
+               (string currency)
+               (lambda (cur cur-len)
+                 (declare (ignore cur-len))
+                 (setf (mem-ref err :int) (%zero-error))
+                 (let ((n (cl-stack-icu:unum-format-double-currency
+                           fmt (float value 1d0) cur
+                           (null-pointer) 0 (null-pointer) err)))
+                   (setf (mem-ref err :int) (%zero-error))
+                   (with-foreign-pointer (buf (* (foreign-type-size 'cl-stack-icu:u-char)
+                                                 (1+ (max n 0))))
+                     (setf n (cl-stack-icu:unum-format-double-currency
+                              fmt (float value 1d0) cur buf (1+ n) (null-pointer) err))
+                     (cl-stack-icu:check-icu (mem-ref err :int) "unum-format-double-currency")
+                     (cl-stack-icu:u-chars-to-lisp buf n)))))
+           (cl-stack-icu:unum-close fmt)))))))
 
 (defun %udate-ms (value)
   "VALUE is universal-time seconds or already UDate (ms). Heuristic: large → ms."
@@ -91,77 +181,83 @@
         (t 0d0)))
 
 (defmethod backend-format-date ((backend icu-backend) value &key locale style skeleton options)
-  (declare (ignore backend skeleton options))
-  (with-foreign-object (err :int)
-    (setf (mem-ref err :int) (%zero-error))
-    (let* ((ds (%date-style style))
-           (fmt (cl-stack-icu:udat-open ds
-                                        (foreign-enum-value 'cl-stack-icu:u-date-format-style :none)
-                                        (%locale-string locale)
-                                        (null-pointer) -1
-                                        (null-pointer) 0 err)))
-      (cl-stack-icu:check-icu (mem-ref err :int) "udat-open")
-      (unwind-protect
-           (progn
-             (setf (mem-ref err :int) (%zero-error))
-             (let ((n (cl-stack-icu:udat-format fmt (%udate-ms value)
-                                                (null-pointer) 0 (null-pointer) err)))
-               (setf (mem-ref err :int) (%zero-error))
-               (with-foreign-pointer (buf (* (foreign-type-size 'cl-stack-icu:u-char)
-                                            (1+ (max n 0))))
-                 (setf n (cl-stack-icu:udat-format fmt (%udate-ms value)
-                                                   buf (1+ n) (null-pointer) err))
-                 (cl-stack-icu:check-icu (mem-ref err :int) "udat-format")
-                 (cl-stack-icu:u-chars-to-lisp buf n))))
-        (cl-stack-icu:udat-close fmt)))))
+  (declare (ignore backend options))
+  (if (and skeleton (plusp (length (string skeleton))))
+      (%format-date-skeleton value locale skeleton)
+      (with-foreign-object (err :int)
+        (setf (mem-ref err :int) (%zero-error))
+        (let* ((ds (%date-style style))
+               (fmt (cl-stack-icu:udat-open ds
+                                            (foreign-enum-value 'cl-stack-icu:u-date-format-style :none)
+                                            (%locale-string locale)
+                                            (null-pointer) -1
+                                            (null-pointer) 0 err)))
+          (cl-stack-icu:check-icu (mem-ref err :int) "udat-open")
+          (unwind-protect
+               (progn
+                 (setf (mem-ref err :int) (%zero-error))
+                 (let ((n (cl-stack-icu:udat-format fmt (%udate-ms value)
+                                                    (null-pointer) 0 (null-pointer) err)))
+                   (setf (mem-ref err :int) (%zero-error))
+                   (with-foreign-pointer (buf (* (foreign-type-size 'cl-stack-icu:u-char)
+                                                (1+ (max n 0))))
+                     (setf n (cl-stack-icu:udat-format fmt (%udate-ms value)
+                                                       buf (1+ n) (null-pointer) err))
+                     (cl-stack-icu:check-icu (mem-ref err :int) "udat-format")
+                     (cl-stack-icu:u-chars-to-lisp buf n))))
+            (cl-stack-icu:udat-close fmt))))))
 
 (defmethod backend-format-time ((backend icu-backend) value &key locale style skeleton options)
-  (declare (ignore backend skeleton options))
-  (with-foreign-object (err :int)
-    (setf (mem-ref err :int) (%zero-error))
-    (let* ((ts (%date-style style))
-           (fmt (cl-stack-icu:udat-open
-                 (foreign-enum-value 'cl-stack-icu:u-date-format-style :none)
-                 ts (%locale-string locale)
-                 (null-pointer) -1 (null-pointer) 0 err)))
-      (cl-stack-icu:check-icu (mem-ref err :int) "udat-open")
-      (unwind-protect
-           (progn
-             (setf (mem-ref err :int) (%zero-error))
-             (let ((n (cl-stack-icu:udat-format fmt (%udate-ms value)
-                                                (null-pointer) 0 (null-pointer) err)))
-               (setf (mem-ref err :int) (%zero-error))
-               (with-foreign-pointer (buf (* (foreign-type-size 'cl-stack-icu:u-char)
-                                            (1+ (max n 0))))
-                 (setf n (cl-stack-icu:udat-format fmt (%udate-ms value)
-                                                   buf (1+ n) (null-pointer) err))
-                 (cl-stack-icu:check-icu (mem-ref err :int) "udat-format")
-                 (cl-stack-icu:u-chars-to-lisp buf n))))
-        (cl-stack-icu:udat-close fmt)))))
+  (declare (ignore backend options))
+  (if (and skeleton (plusp (length (string skeleton))))
+      (%format-date-skeleton value locale skeleton)
+      (with-foreign-object (err :int)
+        (setf (mem-ref err :int) (%zero-error))
+        (let* ((ts (%date-style style))
+               (fmt (cl-stack-icu:udat-open
+                     (foreign-enum-value 'cl-stack-icu:u-date-format-style :none)
+                     ts (%locale-string locale)
+                     (null-pointer) -1 (null-pointer) 0 err)))
+          (cl-stack-icu:check-icu (mem-ref err :int) "udat-open")
+          (unwind-protect
+               (progn
+                 (setf (mem-ref err :int) (%zero-error))
+                 (let ((n (cl-stack-icu:udat-format fmt (%udate-ms value)
+                                                    (null-pointer) 0 (null-pointer) err)))
+                   (setf (mem-ref err :int) (%zero-error))
+                   (with-foreign-pointer (buf (* (foreign-type-size 'cl-stack-icu:u-char)
+                                                (1+ (max n 0))))
+                     (setf n (cl-stack-icu:udat-format fmt (%udate-ms value)
+                                                       buf (1+ n) (null-pointer) err))
+                     (cl-stack-icu:check-icu (mem-ref err :int) "udat-format")
+                     (cl-stack-icu:u-chars-to-lisp buf n))))
+            (cl-stack-icu:udat-close fmt))))))
 
 (defmethod backend-format-datetime ((backend icu-backend) value &key locale date-style time-style
                                     skeleton options)
-  (declare (ignore backend skeleton options))
-  (with-foreign-object (err :int)
-    (setf (mem-ref err :int) (%zero-error))
-    (let ((fmt (cl-stack-icu:udat-open (%date-style date-style)
-                                       (%date-style time-style)
-                                       (%locale-string locale)
-                                       (null-pointer) -1 (null-pointer) 0 err)))
-      (cl-stack-icu:check-icu (mem-ref err :int) "udat-open")
-      (unwind-protect
-           (progn
-             (setf (mem-ref err :int) (%zero-error))
-             (let ((n (cl-stack-icu:udat-format fmt (%udate-ms value)
-                                                (null-pointer) 0 (null-pointer) err)))
-               (setf (mem-ref err :int) (%zero-error))
-               (with-foreign-pointer (buf (* (foreign-type-size 'cl-stack-icu:u-char)
-                                            (1+ (max n 0))))
-                 (setf n (cl-stack-icu:udat-format fmt (%udate-ms value)
-                                                   buf (1+ n) (null-pointer) err))
-                 (cl-stack-icu:check-icu (mem-ref err :int) "udat-format")
-                 (cl-stack-icu:u-chars-to-lisp buf n))))
-        (cl-stack-icu:udat-close fmt)))))
+  (declare (ignore backend options))
+  (if (and skeleton (plusp (length (string skeleton))))
+      (%format-date-skeleton value locale skeleton)
+      (with-foreign-object (err :int)
+        (setf (mem-ref err :int) (%zero-error))
+        (let ((fmt (cl-stack-icu:udat-open (%date-style date-style)
+                                           (%date-style time-style)
+                                           (%locale-string locale)
+                                           (null-pointer) -1 (null-pointer) 0 err)))
+          (cl-stack-icu:check-icu (mem-ref err :int) "udat-open")
+          (unwind-protect
+               (progn
+                 (setf (mem-ref err :int) (%zero-error))
+                 (let ((n (cl-stack-icu:udat-format fmt (%udate-ms value)
+                                                    (null-pointer) 0 (null-pointer) err)))
+                   (setf (mem-ref err :int) (%zero-error))
+                   (with-foreign-pointer (buf (* (foreign-type-size 'cl-stack-icu:u-char)
+                                                (1+ (max n 0))))
+                     (setf n (cl-stack-icu:udat-format fmt (%udate-ms value)
+                                                       buf (1+ n) (null-pointer) err))
+                     (cl-stack-icu:check-icu (mem-ref err :int) "udat-format")
+                     (cl-stack-icu:u-chars-to-lisp buf n))))
+            (cl-stack-icu:udat-close fmt))))))
 
 (defmethod backend-format-relative-time ((backend icu-backend) value unit &key locale numeric options)
   (declare (ignore backend))
